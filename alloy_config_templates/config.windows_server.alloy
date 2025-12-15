@@ -1,0 +1,170 @@
+// Grafana Agent (Alloy) Configuration
+// ==========================================
+// PART 1: METRICS (Prometheus / Windows Exporter)
+// ==========================================
+
+// 1. 定義來源：Windows Exporter
+prometheus.exporter.windows "host" {
+  // 在 enabled_collectors 中加入了 "iis"
+  enabled_collectors = ["cpu", "cs", "logical_disk", "net", "os", "service", "system", "textfile", "time", "diskdrive", "iis"]
+}
+
+// 2. 定義接收與轉換：Scrape
+prometheus.scrape "host_scraper" {
+  targets     = prometheus.exporter.windows.host.targets
+  forward_to = [prometheus.remote_write.default.receiver]
+  scrape_interval = "60s" 
+}
+
+// 3. 定義輸出：發送到 Prometheus
+prometheus.remote_write "default" {
+  endpoint {
+    url = "[your_prometheus_url]"
+    basic_auth {
+      username = "[your_prometheus_username]" 
+      password = "[your_prometheus_password]" 
+    }
+  }
+}
+
+// ==========================================
+// PART 2: LOG OUTPUT (共用輸出設定 - 已加入 Loki 驗證)
+// ==========================================
+
+// 定義寫入目標 (Loki Server) - IIS 和 Windows Events 都用這個
+loki.write "default" {
+  endpoint {
+    url = "[your_loki_url]"
+    // ↓↓↓ 如果 Loki 需要驗證，請在此加入 basic_auth ↓↓↓
+    basic_auth {
+      username = "[your_loki_username]" 
+      password = "[your_loki_password]" 
+    }
+  }
+}
+
+// ==========================================
+// PART 3: WINDOWS EVENT LOGS (修正版: 拆分來源)
+// ==========================================
+
+// 1. 來源 A: Application Log
+loki.source.windowsevent "event_application" {
+  locale = 1033
+  eventlog_name = "Application"  // 修正：參數為單數，且只能填一個
+  bookmark_path = "C:\\ProgramData\\GrafanaAlloy\\bookmark-application.xml" // 修正：獨立的書籤檔
+  forward_to    = [loki.process.windows_event_parse.receiver]
+}
+
+// 2. 來源 B: System Log
+loki.source.windowsevent "event_system" {
+  locale = 1033
+  eventlog_name = "System"
+  bookmark_path = "C:\\ProgramData\\GrafanaAlloy\\bookmark-system.xml" // 修正：獨立的書籤檔
+  forward_to    = [loki.process.windows_event_parse.receiver]
+}
+
+// 3. 來源 C: Security Log
+loki.source.windowsevent "event_security" {
+  locale = 1033
+  eventlog_name = "Security"
+  bookmark_path = "C:\\ProgramData\\GrafanaAlloy\\bookmark-security.xml" // 修正：獨立的書籤檔
+  forward_to    = [loki.process.windows_event_parse.receiver]
+}
+
+// 4. 統一處理：所有 Event Log 都送來這裡解析
+loki.process "windows_event_parse" {
+  forward_to = [loki.write.default.receiver]
+
+  stage.static_labels {
+    values = {
+      job = "windows_event_logs",
+      os  = "windows",
+    }
+  }
+
+  // 解析 JSON
+  stage.json {
+    expressions = {
+      level    = "levelText",
+      source   = "source",
+      event_id = "eventID",
+      channel  = "channel", // 多抓一個 channel 欄位，方便分辨是 System 還是 App
+    }
+  }
+
+  // 轉為標籤
+  stage.labels {
+    values = {
+      level    = "level",
+      source   = "source",
+      event_id = "event_id",
+      channel  = "channel",
+    }
+  }
+}
+
+// ==========================================
+// PART 4: IIS LOG FILES (IIS 檔案日誌)
+// ==========================================
+
+// 1. 定義檔案探索 (File Discovery)
+local.file_match "iis_logs" {
+  // [重要修改] 因使用 windowsevent，判定環境為 Windows，故修改為標準 IIS 路徑
+  // 若您的 Log 路徑不同，請修改此處
+  path_targets = [{"__path__" = "C:\\inetpub\\logs\\LogFiles\\W3SVC*\\*.log"}]
+  sync_period  = "10s"
+}
+
+// 2. 讀取檔案 (Tail Files)
+loki.source.file "iis_read" {
+  targets    = local.file_match.iis_logs.targets
+  forward_to = [loki.process.iis_parse.receiver]
+}
+
+// 3. 解析與處理 (Parsing & Processing)
+loki.process "iis_parse" {
+  forward_to = [loki.write.default.receiver] // 送到上面的 loki.write.default
+
+  // debug = true
+
+  // 設定基礎標籤
+  stage.static_labels {
+      values = {
+          job = "iis_access_logs",
+          env = "production", // 建議改為 production，因為 windows event 不支援 docker 環境
+          os  = "windows_iis",
+      }
+  }
+
+  stage.drop {
+    expression = "^#.*"
+  }
+    
+  // 提取日誌欄位
+  stage.pattern {
+    pattern = "<date> <time> <s_ip> <cs_method> <cs_uri_stem> <cs_uri_query> <s_port> <cs_username> <c_ip> <cs_user_agent> <cs_referer> <sc_status> <sc_substatus> <sc_win32_status> <time_taken>"
+  }
+
+  stage.template {
+    source    = "ts_tmp"
+    template = "{{ .date }} {{ .time }}"
+  }
+
+  stage.timestamp {
+      source    = "ts_tmp"
+      format    = "2006-01-02 15:04:05"
+      location = "UTC" 
+  }
+    
+  stage.labels {
+    values = {
+      method = "cs_method",
+      status = "sc_status",
+      host   = "s_ip",
+    }
+  }
+
+  stage.label_drop {
+    values = ["ts_tmp", "date", "time"]
+  }
+}

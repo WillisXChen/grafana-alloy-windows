@@ -72,6 +72,7 @@ set "MSG_SERVICE_RESTARTED=[OK] Service restarted."
 set "MSG_SERVICE_FAIL=[ERROR] Failed to restart service."
 set "MSG_CHECK_STATUS=[SERVICE] Checking Alloy service status..."
 set "MSG_COMPLETE=[INFO] Verification and Deployment complete"
+set "MSG_CHECKS_FAILED=[ERROR] One or more checks failed. Aborting deployment."
 goto :START_SCRIPT
 
 :LANG_ZH
@@ -118,6 +119,7 @@ set "MSG_SERVICE_RESTARTED=[OK] 服務已重新啟動。"
 set "MSG_SERVICE_FAIL=[錯誤] 重新啟動服務失敗。"
 set "MSG_CHECK_STATUS=[服務] 正在檢查 Alloy 服務狀態..."
 set "MSG_COMPLETE=[資訊] 驗證與部署完成"
+set "MSG_CHECKS_FAILED=[錯誤] 一項或多項檢查失敗。中止部署。"
 goto :START_SCRIPT
 
 :START_SCRIPT
@@ -196,10 +198,16 @@ for /f "usebackq delims=" %%p in (`powershell -NoProfile -Command "$p='';while($
 echo.
 
 :: 2. Check Directories
+set "CHECKS_FAILED=0"
 echo %C_CYAN%%MSG_CHECK_DIR%%C_RESET%
 set "DIR_ALLOY=C:\ProgramData\GrafanaAlloy"
 if not exist "%DIR_ALLOY%" mkdir "%DIR_ALLOY%"
-if exist "%DIR_ALLOY%" ( echo %C_GREEN%%MSG_ALLOY_DIR_OK%%C_RESET% %DIR_ALLOY% ) else ( echo %C_RED%%MSG_ALLOY_DIR_FAIL%%C_RESET% )
+if exist "%DIR_ALLOY%" (
+    echo %C_GREEN%%MSG_ALLOY_DIR_OK%%C_RESET% %DIR_ALLOY%
+) else (
+    echo %C_RED%%MSG_ALLOY_DIR_FAIL%%C_RESET%
+    set "CHECKS_FAILED=1"
+)
 
 set "DIR_AGENT=C:\Program Files\GrafanaLabs\Alloy"
 if exist "%DIR_AGENT%" ( echo %C_GREEN%%MSG_AGENT_DIR_OK%%C_RESET% %DIR_AGENT% ) else ( echo %C_RED%%MSG_AGENT_DIR_WARN%%C_RESET% )
@@ -213,14 +221,31 @@ echo %C_CYAN%%MSG_CHECK_NET%%C_RESET%
 
 echo %MSG_TEST_PROM% (%PROM_READY_URL%)...
 curl -s -u "%PROM_USER%:%PROM_PASS%" -o nul -w "%%{http_code}" --connect-timeout 5 %PROM_READY_URL% | find "200" >nul 2>&1
-if %errorLevel% == 0 ( echo %C_GREEN%%MSG_PROM_READY%%C_RESET% ) else ( echo %C_RED%%MSG_PROM_FAIL%%C_RESET% )
+if %errorLevel% == 0 (
+    echo %C_GREEN%%MSG_PROM_READY%%C_RESET%
+) else (
+    echo %C_RED%%MSG_PROM_FAIL%%C_RESET%
+    set "CHECKS_FAILED=1"
+)
 
 echo %MSG_TEST_LOKI% (%LOKI_READY_URL%)...
 curl -s -u "%LOKI_USER%:%LOKI_PASS%" %LOKI_READY_URL% | findstr /i "ready" >nul 2>&1
-if %errorLevel% == 0 ( echo %C_GREEN%%MSG_LOKI_READY%%C_RESET% ) else ( echo %C_RED%%MSG_LOKI_FAIL%%C_RESET% )
+if %errorLevel% == 0 (
+    echo %C_GREEN%%MSG_LOKI_READY%%C_RESET%
+) else (
+    echo %C_RED%%MSG_LOKI_FAIL%%C_RESET%
+    set "CHECKS_FAILED=1"
+)
 
 
 :: 4. Generate and Deploy Config
+if "!CHECKS_FAILED!"=="1" (
+    echo.
+    echo %C_RED%%MSG_CHECKS_FAILED%%C_RESET%
+    pause
+    exit /b 1
+)
+
 echo %C_CYAN%%MSG_DEPLOY_START%%C_RESET%
 set "TEMPLATE_FILE=%~dp0alloy_config_templates\config.windows_server.alloy"
 set "OUTPUT_FILE=%~dp0config.alloy"

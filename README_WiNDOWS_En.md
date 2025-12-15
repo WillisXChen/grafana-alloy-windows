@@ -43,5 +43,64 @@ We provide an automated script `set_alloy_config_to_windows_server.bat` to help 
         - `Prometheus Username`: Your Prometheus username
         - `Prometheus Password`: Your Prometheus password (Input will be hidden, right-click to paste then press Enter)
 
+    ```powershell
+    PS C:\Users\Administrator\Documents\Test\Monitor> .\set_alloy_config_to_windows_server.bat
+    Select Language / 選擇語言:
+    1. English
+    2. Traditional Chinese (繁體中文)
+    Enter choice (1 or 2): 1
+    ========================================================
+    Grafana Alloy Environment Verification Script
+    ========================================================
+
+    [CHECK] Checking for Administrator privileges...
+    [OK] Running as Administrator
+
+    [INPUT] Please enter credentials:
+
+    --------------------------------------------------------
+    Enter Loki Base URL: http://loki-base-url:3101
+    Enter Loki Username: loki-username
+    Enter Loki Password:
+    (Hidden Input: Right-click once to paste, then press Enter)
+
+    --------------------------------------------------------
+    Enter Prometheus Base URL: http://prometheus-base-url:9090
+    Enter Prometheus Username: prom-username
+    Enter Prometheus Password:
+    (Hidden Input: Right-click once to paste, then press Enter)
+
+    [CHECK] Verifying directories...
+    [OK] Alloy Dir: C:\ProgramData\GrafanaAlloy
+    [OK] Agent Dir: C:\Program Files\GrafanaLabs\Alloy
+    [OK] IIS Log Dir: C:\inetpub\logs\LogFiles
+
+    [CHECK] Verifying API Connectivity...
+    Testing Prometheus (http://prometheus-base-url:9090/-/ready)...
+    [OK] Prometheus READY
+    Testing Loki (http://loki-base-url:3101/ready)...
+    [OK] Loki READY
+    [DEPLOY] Generating and deploying configuration...
+    Reading template from: C:\Users\Administrator\Documents\Test\Monitor\alloy_config_templates\config.windows_server.alloy
+    Reading template from: C:\Users\Administrator\Documents\Test\Monitor\alloy_config_templates\config.windows_server.alloy
+    [OK] Config generated: C:\Users\Administrator\Documents\Test\Monitor\config.alloy
+    Copying to: C:\Program Files\GrafanaLabs\Alloy\config.alloy
+    [OK] Config deployed successfully.
+
+    [SERVICE] Restarting Alloy service...
+    [OK] Service restarted.
+    [SERVICE] Checking Alloy service status...
+
+    Status   Name               DisplayName
+    ------   ----               -----------
+    Running  Alloy              alloy
+
+
+
+    [INFO] Verification and Deployment complete
+    Press any key to continue . . .
+    PS C:\Users\Administrator\Documents\Test\Monitor>
+    ```
+
 ---
 **Note**: If the IIS Log directory is different, please manually modify the configuration file or verify the path.

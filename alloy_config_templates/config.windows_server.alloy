@@ -1,42 +1,45 @@
-// Grafana Agent (Alloy) Configuration
+// Grafana Alloy Configuration
+// ==========================================
+// PART 0: IDENTIFICATION (Fetching Unique IDs)
+// ==========================================
+
+// 1. Fetch Hardware UUID (from Win32_ComputerSystemProduct)
+local.command "get_uuid" {
+  command = "powershell -Command \"(Get-WmiObject Win32_ComputerSystemProduct).UUID\""
+}
+
+// 2. Fetch OS MachineGuid (from Registry)
+local.command "get_guid" {
+  command = "powershell -Command \"(Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Cryptography').MachineGuid\""
+}
+
+// 3. Fetch Hostname (Standard DNS Hostname)
+local.command "get_hostname" {
+  command = "powershell -Command \"[System.Net.Dns]::GetHostName()\""
+}
+
 // ==========================================
 // PART 1: METRICS (Prometheus / Windows Exporter)
 // ==========================================
 
-// 1. 定義來源：Windows Exporter
+// Define Windows Exporter Source
 prometheus.exporter.windows "host" {
   enabled_collectors = [
-    "cache",
-    "cpu",
-    "cpu_info",
-    "cs",
-    "diskdrive",
-    "iis",            // Web Server
-    "logical_disk",
-    "memory",
-    "mssql",          // Database
-    "net",
-    "os",
-    "physical_disk",
-    "process",
-    "scheduled_task",
-    "service",
-    "system",
-    "tcp",
-    "textfile",
-    "time",
-    "udp",
+    "cache", "cpu", "cpu_info", "cs", "diskdrive", "iis",
+    "logical_disk", "memory", "mssql", "net", "os",
+    "physical_disk", "process", "scheduled_task", "service",
+    "system", "tcp", "textfile", "time", "udp",
   ]
 }
 
-// 2. 定義接收與轉換：Scrape
+// Scrape Configuration
 prometheus.scrape "host_scraper" {
-  targets     = prometheus.exporter.windows.host.targets
+  targets    = prometheus.exporter.windows.host.targets
   forward_to = [prometheus.remote_write.default.receiver]
   scrape_interval = "60s" 
 }
 
-// 3. 定義輸出：發送到 Prometheus
+// Output to Prometheus
 prometheus.remote_write "default" {
   endpoint {
     url = "[your_prometheus_url]"
@@ -45,17 +48,22 @@ prometheus.remote_write "default" {
       password = "[your_prometheus_password]" 
     }
   }
+
+  // Apply your specific label mapping to all metrics
+  external_labels = {
+    "windows_hardware_uuid"    = trim_space(local.command.get_uuid.stdout),
+    "windows_os_machine_guid"  = trim_space(local.command.get_guid.stdout),
+    "windows_hostname"         = trim_space(local.command.get_hostname.stdout),
+  }
 }
 
 // ==========================================
-// PART 2: LOG OUTPUT (共用輸出設定 - 已加入 Loki 驗證)
+// PART 2: LOG OUTPUT (Shared Loki Configuration)
 // ==========================================
 
-// 定義寫入目標 (Loki Server) - IIS 和 Windows Events 都用這個
 loki.write "default" {
   endpoint {
     url = "[your_loki_url]"
-    // ↓↓↓ 如果 Loki 需要驗證，請在此加入 basic_auth ↓↓↓
     basic_auth {
       username = "[your_loki_username]" 
       password = "[your_loki_password]" 
@@ -64,55 +72,53 @@ loki.write "default" {
 }
 
 // ==========================================
-// PART 3: WINDOWS EVENT LOGS (修正版: 拆分來源)
+// PART 3: WINDOWS EVENT LOGS
 // ==========================================
 
-// 1. 來源 A: Application Log
 loki.source.windowsevent "event_application" {
   locale = 1033
-  eventlog_name = "Application"  // 修正：參數為單數，且只能填一個
-  bookmark_path = "C:\\ProgramData\\GrafanaAlloy\\bookmark-application.xml" // 修正：獨立的書籤檔
+  eventlog_name = "Application"
+  bookmark_path = "C:\\ProgramData\\GrafanaAlloy\\bookmark-application.xml"
   forward_to    = [loki.process.windows_event_parse.receiver]
 }
 
-// 2. 來源 B: System Log
 loki.source.windowsevent "event_system" {
   locale = 1033
   eventlog_name = "System"
-  bookmark_path = "C:\\ProgramData\\GrafanaAlloy\\bookmark-system.xml" // 修正：獨立的書籤檔
+  bookmark_path = "C:\\ProgramData\\GrafanaAlloy\\bookmark-system.xml"
   forward_to    = [loki.process.windows_event_parse.receiver]
 }
 
-// 3. 來源 C: Security Log
 loki.source.windowsevent "event_security" {
   locale = 1033
   eventlog_name = "Security"
-  bookmark_path = "C:\\ProgramData\\GrafanaAlloy\\bookmark-security.xml" // 修正：獨立的書籤檔
+  bookmark_path = "C:\\ProgramData\\GrafanaAlloy\\bookmark-security.xml"
   forward_to    = [loki.process.windows_event_parse.receiver]
 }
 
-// 4. 統一處理：所有 Event Log 都送來這裡解析
 loki.process "windows_event_parse" {
   forward_to = [loki.write.default.receiver]
 
   stage.static_labels {
     values = {
-      job = "windows_event_logs",
-      os  = "windows",
+      job                     = "windows_event_logs",
+      os                      = "windows",
+      // Apply your specific label mapping to Event Logs
+      "windows_hardware_uuid"   = trim_space(local.command.get_uuid.stdout),
+      "windows_os_machine_guid" = trim_space(local.command.get_guid.stdout),
+      "windows_hostname"        = trim_space(local.command.get_hostname.stdout),
     }
   }
 
-  // 解析 JSON
   stage.json {
     expressions = {
       level    = "levelText",
       source   = "source",
       event_id = "eventID",
-      channel  = "channel", // 多抓一個 channel 欄位，方便分辨是 System 還是 App
+      channel  = "channel",
     }
   }
 
-  // 轉為標籤
   stage.labels {
     values = {
       level    = "level",
@@ -124,35 +130,31 @@ loki.process "windows_event_parse" {
 }
 
 // ==========================================
-// PART 4: IIS LOG FILES (IIS 檔案日誌)
+// PART 4: IIS LOG FILES
 // ==========================================
 
-// 1. 定義檔案探索 (File Discovery)
 local.file_match "iis_logs" {
-  // [重要修改] 因使用 windowsevent，判定環境為 Windows，故修改為標準 IIS 路徑
-  // 若您的 Log 路徑不同，請修改此處
   path_targets = [{"__path__" = "C:\\inetpub\\logs\\LogFiles\\W3SVC*\\*.log"}]
   sync_period  = "10s"
 }
 
-// 2. 讀取檔案 (Tail Files)
 loki.source.file "iis_read" {
   targets    = local.file_match.iis_logs.targets
   forward_to = [loki.process.iis_parse.receiver]
 }
 
-// 3. 解析與處理 (Parsing & Processing)
 loki.process "iis_parse" {
-  forward_to = [loki.write.default.receiver] // 送到上面的 loki.write.default
+  forward_to = [loki.write.default.receiver]
 
-  // debug = true
-
-  // 設定基礎標籤
   stage.static_labels {
       values = {
-          job = "iis_access_logs",
-          env = "production", // 建議改為 production，因為 windows event 不支援 docker 環境
-          os  = "windows_iis",
+          job                     = "iis_access_logs",
+          env                     = "production",
+          os                      = "windows_iis",
+          // Apply your specific label mapping to IIS Logs
+          "windows_hardware_uuid"   = trim_space(local.command.get_uuid.stdout),
+          "windows_os_machine_guid" = trim_space(local.command.get_guid.stdout),
+          "windows_hostname"        = trim_space(local.command.get_hostname.stdout),
       }
   }
 
@@ -160,19 +162,18 @@ loki.process "iis_parse" {
     expression = "^#.*"
   }
     
-  // 提取日誌欄位
   stage.pattern {
     pattern = "<date> <time> <s_ip> <cs_method> <cs_uri_stem> <cs_uri_query> <s_port> <cs_username> <c_ip> <cs_user_agent> <cs_referer> <sc_status> <sc_substatus> <sc_win32_status> <time_taken>"
   }
 
   stage.template {
-    source    = "ts_tmp"
+    source   = "ts_tmp"
     template = "{{ .date }} {{ .time }}"
   }
 
   stage.timestamp {
-      source    = "ts_tmp"
-      format    = "2006-01-02 15:04:05"
+      source   = "ts_tmp"
+      format   = "2006-01-02 15:04:05"
       location = "UTC" 
   }
     

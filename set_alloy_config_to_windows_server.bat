@@ -290,34 +290,44 @@ if %errorLevel% == 0 (
 echo.
 
 :: ========================================================
-:: 4.5 ADDED: Enable Feature Gate (Fixes local.command errors)
+:: 4.5 FIXED: Enable Feature Gate (Fixes local.command errors)
 :: ========================================================
 echo %C_CYAN%%MSG_FIX_GATE%%C_RESET%
+
+:: We use a simplified PowerShell execution to avoid Batch escaping issues
 powershell -NoProfile -Command ^
     "$regPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\Alloy';" ^
     "if (!(Test-Path $regPath)) { $regPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\Grafana Alloy' };" ^
-    "$currentPath = (Get-ItemProperty -Path $regPath).ImagePath;" ^
-    "if ($currentPath -notlike '*--feature-gates=local-system*') {" ^
-    "    $newPath = $currentPath + ' --feature-gates=local-system';" ^
-    "    Set-ItemProperty -Path $regPath -Name ImagePath -Value $newPath;" ^
-    "    Write-Host '%MSG_GATE_OK%' -ForegroundColor Green;" ^
+    "if (Test-Path $regPath) {" ^
+    "    $imagePath = (Get-ItemProperty -Path $regPath).ImagePath;" ^
+    "    if ($imagePath -notlike '*--feature-gates=local-system*') {" ^
+    "        $newPath = $imagePath + ' --feature-gates=local-system';" ^
+    "        Set-ItemProperty -Path $regPath -Name ImagePath -Value $newPath;" ^
+    "        Write-Host '%MSG_GATE_OK%' -ForegroundColor Green" ^
+    "    } else {" ^
+    "        Write-Host '%MSG_GATE_SKIP%' -ForegroundColor Yellow" ^
+    "    }" ^
     "} else {" ^
-    "    Write-Host '%MSG_GATE_SKIP%' -ForegroundColor Yellow;" ^
+    "    Write-Host 'Service Registry path not found.' -ForegroundColor Red" ^
     "}"
 echo.
 
 :: 5. Restart and Verify the Alloy Service
 echo %C_CYAN%%MSG_RESTART_SERVICE%%C_RESET%
-:: Attempt to restart service using both possible names
-powershell -Command "Restart-Service -Name Alloy, 'Grafana Alloy' -ErrorAction SilentlyContinue"
-if %errorLevel% == 0 (
-    echo %C_GREEN%%MSG_SERVICE_RESTARTED%%C_RESET%
-) else (
-    echo %C_RED%%MSG_SERVICE_FAIL%%C_RESET%
-)
+
+:: Use a more forceful restart logic
+powershell -NoProfile -Command ^
+    "$svcs = Get-Service -Name Alloy, 'Grafana Alloy' -ErrorAction SilentlyContinue | Where-Object { $_.Status -ne 'Stopped' };" ^
+    "if ($svcs) { Restart-Service -InputObject $svcs -Force -ErrorAction SilentlyContinue } else { Start-Service -Name Alloy, 'Grafana Alloy' -ErrorAction SilentlyContinue };" ^
+    "Start-Sleep -Seconds 2;" ^
+    "if ((Get-Service -Name Alloy, 'Grafana Alloy' -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Running' })) {" ^
+    "    Write-Host '%MSG_SERVICE_RESTARTED%' -ForegroundColor Green" ^
+    "} else {" ^
+    "    Write-Host '%MSG_SERVICE_FAIL%' -ForegroundColor Red" ^
+    "}"
 
 echo %C_CYAN%%MSG_CHECK_STATUS%%C_RESET%
-powershell -Command "Get-Service Alloy, 'Grafana Alloy' -ErrorAction SilentlyContinue"
+powershell -NoProfile -Command "Get-Service Alloy, 'Grafana Alloy' -ErrorAction SilentlyContinue | Select-Object Status, Name, DisplayName"
 echo.
 echo %C_CYAN%%MSG_COMPLETE%%C_RESET%
 pause

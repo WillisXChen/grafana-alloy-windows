@@ -5,10 +5,10 @@ chcp 65001 >nul
 :: ========================================================
 :: CONFIGURATION
 :: ========================================================
-:: (No default URLs)
+:: (No default URLs provided)
 :: ========================================================
 
-:: Color Setup
+:: Color Setup for Console Output
 for /F "tokens=1,2 delims=#" %%a in ('"prompt #$H#$E# & echo on & for %%b in (1) do rem"') do (
   set "ESC=%%b"
 )
@@ -67,6 +67,9 @@ set "MSG_TARGET_DIR_WARN=[WARN] Target directory not found. Creating:"
 set "MSG_COPY_START=Copying to:"
 set "MSG_DEPLOY_OK=[OK] Config deployed successfully."
 set "MSG_DEPLOY_FAIL=[ERROR] Failed to deploy config."
+set "MSG_FIX_GATE=[FIX] Enabling local-system feature gate..."
+set "MSG_GATE_OK=[OK] Feature gate enabled in Registry."
+set "MSG_GATE_SKIP=[INFO] Feature gate already active."
 set "MSG_RESTART_SERVICE=[SERVICE] Restarting Alloy service..."
 set "MSG_SERVICE_RESTARTED=[OK] Service restarted."
 set "MSG_SERVICE_FAIL=[ERROR] Failed to restart service."
@@ -114,6 +117,9 @@ set "MSG_TARGET_DIR_WARN=[警告] 找不到目標目錄。正在建立："
 set "MSG_COPY_START=正在複製到："
 set "MSG_DEPLOY_OK=[OK] 設定部署成功。"
 set "MSG_DEPLOY_FAIL=[錯誤] 部署設定失敗。"
+set "MSG_FIX_GATE=[修正] 正在啟用 local-system 特徵門控..."
+set "MSG_GATE_OK=[OK] 已在 Registry 啟用特徵門控。"
+set "MSG_GATE_SKIP=[資訊] 特徵門控已在運行中。"
 set "MSG_RESTART_SERVICE=[服務] 正在重新啟動 Alloy 服務..."
 set "MSG_SERVICE_RESTARTED=[OK] 服務已重新啟動。"
 set "MSG_SERVICE_FAIL=[錯誤] 重新啟動服務失敗。"
@@ -128,7 +134,7 @@ echo %C_CYAN%%MSG_HEADER_1%%C_RESET%
 echo %C_CYAN%========================================================%C_RESET%
 echo.
 
-:: 1. Check Administrator
+:: 1. Check Administrator privileges
 echo %C_CYAN%%MSG_CHECK_ADMIN%%C_RESET%
 net session >nul 2>&1
 if %errorLevel% == 0 (
@@ -141,12 +147,12 @@ if %errorLevel% == 0 (
 echo.
 
 :: ========================================================
-:: INTERACTIVE CREDENTIAL INPUT (Hidden)
+:: INTERACTIVE CREDENTIAL INPUT
 :: ========================================================
 echo %C_CYAN%%MSG_INPUT_CRED%%C_RESET%
 echo.
 
-:: --- Loki Input ---
+:: --- Loki Configuration Input ---
 echo --------------------------------------------------------
 set /p "LOKI_BASE_URL=%MSG_LOKI_URL_PROMPT%"
 if "%LOKI_BASE_URL%"=="" (
@@ -165,14 +171,14 @@ if "%LOKI_USER%"=="" (
     exit /b
 )
 
-:: 這裡提示使用者：貼上時不會有反應
+:: Note: No visual feedback is shown when typing or pasting the password
 echo %MSG_LOKI_PASS_PROMPT%
 echo %C_YELLOW%%MSG_HIDDEN_INPUT%%C_RESET%
 set "LOKI_PASS="
 for /f "usebackq delims=" %%p in (`powershell -NoProfile -Command "$p='';while($true){$k=[System.Console]::ReadKey($true);if($k.KeyChar -eq 13){break}if($k.KeyChar -eq 8){if($p.Length -gt 0){$p=$p.Substring(0,$p.Length-1)}}else{$p+=$k.KeyChar}};Write-Output $p"`) do set "LOKI_PASS=%%p"
 echo.
 
-:: --- Prometheus Input ---
+:: --- Prometheus Configuration Input ---
 echo --------------------------------------------------------
 set /p "PROM_BASE_URL=%MSG_PROM_URL_PROMPT%"
 if "%PROM_BASE_URL%"=="" (
@@ -197,7 +203,7 @@ set "PROM_PASS="
 for /f "usebackq delims=" %%p in (`powershell -NoProfile -Command "$p='';while($true){$k=[System.Console]::ReadKey($true);if($k.KeyChar -eq 13){break}if($k.KeyChar -eq 8){if($p.Length -gt 0){$p=$p.Substring(0,$p.Length-1)}}else{$p+=$k.KeyChar}};Write-Output $p"`) do set "PROM_PASS=%%p"
 echo.
 
-:: 2. Check Directories
+:: 2. Verify Local Directories
 set "CHECKS_FAILED=0"
 echo %C_CYAN%%MSG_CHECK_DIR%%C_RESET%
 set "DIR_ALLOY=C:\ProgramData\GrafanaAlloy"
@@ -216,7 +222,7 @@ set "DIR_IIS_LOGS=C:\inetpub\logs\LogFiles"
 if exist "%DIR_IIS_LOGS%" ( echo %C_GREEN%%MSG_IIS_DIR_OK%%C_RESET% %DIR_IIS_LOGS% ) else ( echo %C_YELLOW%%MSG_IIS_DIR_WARN%%C_RESET% )
 echo.
 
-:: 3. Check Network
+:: 3. Verify API Connectivity via Network
 echo %C_CYAN%%MSG_CHECK_NET%%C_RESET%
 
 echo %MSG_TEST_PROM% (%PROM_READY_URL%)...
@@ -238,7 +244,7 @@ if %errorLevel% == 0 (
 )
 
 
-:: 4. Generate and Deploy Config
+:: 4. Generate and Deploy Alloy Configuration
 if "!CHECKS_FAILED!"=="1" (
     echo.
     echo %C_RED%%MSG_CHECKS_FAILED%%C_RESET%
@@ -258,7 +264,6 @@ if not exist "%TEMPLATE_FILE%" (
     exit /b 1
 )
 
-echo %MSG_READ_TPL% %TEMPLATE_FILE%
 echo %MSG_READ_TPL% %TEMPLATE_FILE%
 powershell -NoProfile -Command "(Get-Content '%TEMPLATE_FILE%' -Encoding UTF8) -replace '\[your_prometheus_username\]', '%PROM_USER%' -replace '\[your_prometheus_password\]', '%PROM_PASS%' -replace '\[your_loki_username\]', '%LOKI_USER%' -replace '\[your_loki_password\]', '%LOKI_PASS%' -replace '\[your_prometheus_url\]', '%PROM_PUSH_URL%' -replace '\[your_loki_url\]', '%LOKI_PUSH_URL%' | Set-Content -Encoding UTF8 '%OUTPUT_FILE%'"
 
@@ -284,9 +289,27 @@ if %errorLevel% == 0 (
 )
 echo.
 
-:: 5. Restart and Verify Service
+:: ========================================================
+:: 4.5 ADDED: Enable Feature Gate (Fixes local.command errors)
+:: ========================================================
+echo %C_CYAN%%MSG_FIX_GATE%%C_RESET%
+powershell -NoProfile -Command ^
+    "$regPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\Alloy';" ^
+    "if (!(Test-Path $regPath)) { $regPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\Grafana Alloy' };" ^
+    "$currentPath = (Get-ItemProperty -Path $regPath).ImagePath;" ^
+    "if ($currentPath -notlike '*--feature-gates=local-system*') {" ^
+    "    $newPath = $currentPath + ' --feature-gates=local-system';" ^
+    "    Set-ItemProperty -Path $regPath -Name ImagePath -Value $newPath;" ^
+    "    Write-Host '%MSG_GATE_OK%' -ForegroundColor Green;" ^
+    "} else {" ^
+    "    Write-Host '%MSG_GATE_SKIP%' -ForegroundColor Yellow;" ^
+    "}"
+echo.
+
+:: 5. Restart and Verify the Alloy Service
 echo %C_CYAN%%MSG_RESTART_SERVICE%%C_RESET%
-powershell -Command "Restart-Service alloy"
+:: Attempt to restart service using both possible names
+powershell -Command "Restart-Service -Name Alloy, 'Grafana Alloy' -ErrorAction SilentlyContinue"
 if %errorLevel% == 0 (
     echo %C_GREEN%%MSG_SERVICE_RESTARTED%%C_RESET%
 ) else (
@@ -294,7 +317,7 @@ if %errorLevel% == 0 (
 )
 
 echo %C_CYAN%%MSG_CHECK_STATUS%%C_RESET%
-powershell -Command "Get-Service alloy"
+powershell -Command "Get-Service Alloy, 'Grafana Alloy' -ErrorAction SilentlyContinue"
 echo.
 echo %C_CYAN%%MSG_COMPLETE%%C_RESET%
 pause

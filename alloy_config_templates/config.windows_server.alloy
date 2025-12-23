@@ -16,7 +16,12 @@ local.file "host_info" {
 
 prometheus.exporter.windows "host" {
   // Enabled "iis" collector specifically to monitor IIS metrics.
-  enabled_collectors = ["cpu", "cs", "logical_disk", "net", "os", "service", "system", "textfile", "time", "diskdrive", "iis"]
+  enabled_collectors = [
+    "cache", "cpu", "cpu_info", "cs", "diskdrive", "iis",
+    "logical_disk", "memory", "mssql", "net", "os",
+    "physical_disk", "process", "scheduled_task", "service",
+    "system", "tcp", "textfile", "time", "udp",
+  ]
 }
 
 prometheus.scrape "host_scraper" {

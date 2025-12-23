@@ -280,7 +280,7 @@ if not exist "%TARGET_DIR%" (
 echo %C_CYAN%%MSG_HOST_INFO_START%%C_RESET%
 :: 確保目標資料夾存在，否則 PowerShell Out-File 會失敗
 if not exist "%TARGET_DIR%" mkdir "%TARGET_DIR%"
-powershell -NoProfile -Command "$u=(Get-WmiObject Win32_ComputerSystemProduct).UUID; $g=(Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Cryptography').MachineGuid; $h=[System.Net.Dns]::GetHostName(); $path='%TARGET_DIR%\host_info.json'; $data=@{uuid=$u; guid=$g; hostname=$h}; $data | ConvertTo-Json | Out-File -FilePath $path -Encoding utf8"
+powershell -NoProfile -Command "$u=(Get-WmiObject Win32_ComputerSystemProduct).UUID; $g=(Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Cryptography').MachineGuid; $h=[System.Net.Dns]::GetHostName(); $path='%TARGET_DIR%\host_info.json'; $data=@{uuid=$u; guid=$g; hostname=$h}; [System.IO.File]::WriteAllText($path, ($data | ConvertTo-Json))"
 
 if exist "%TARGET_DIR%\host_info.json" (
     echo %C_GREEN%%MSG_HOST_INFO_OK%%C_RESET%
